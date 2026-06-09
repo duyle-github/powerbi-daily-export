@@ -1,0 +1,61 @@
+name: Daily Power BI Export - MD_QDGP
+
+on:
+  schedule:
+    # Chạy lúc 8:00 AM Singapore time (UTC+7 = 00:00 UTC)
+    - cron: '0 0 * * *'
+  
+  # Cho phép chạy thủ công từ GitHub UI
+  workflow_dispatch:
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      # 1. Checkout code
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # 2. Setup Python
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      # 3. Cache dependencies để chạy nhanh hơn
+      - name: Cache pip dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
+      # 4. Install dependencies
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install requests pandas Office365-REST-Python-Client
+
+      # 5. Chạy script export
+      - name: Run Power BI Export
+        env:
+          TENANT_ID:        ${{ secrets.TENANT_ID }}
+          CLIENT_ID:        ${{ secrets.CLIENT_ID }}
+          CLIENT_SECRET:    ${{ secrets.CLIENT_SECRET }}
+          WORKSPACE_ID:     ${{ secrets.WORKSPACE_ID }}
+          DATASET_ID:       ${{ secrets.DATASET_ID }}
+          SHAREPOINT_SITE:  ${{ secrets.SHAREPOINT_SITE }}
+          SHAREPOINT_FOLDER: ${{ secrets.SHAREPOINT_FOLDER }}
+          PBI_USERNAME:     ${{ secrets.PBI_USERNAME }}
+          PBI_PASSWORD:     ${{ secrets.PBI_PASSWORD }}
+        run: python export_powerbi.py
+
+      # 6. Thông báo nếu thất bại
+      - name: Notify on failure
+        if: failure()
+        run: |
+          echo "❌ Export failed! Check logs above for details."
+          exit 1
