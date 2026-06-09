@@ -8,30 +8,29 @@ from office365.sharepoint.client_context import ClientContext
 TENANT_ID     = os.environ["TENANT_ID"]
 CLIENT_ID     = os.environ["CLIENT_ID"]
 CLIENT_SECRET = os.environ["CLIENT_SECRET"]
-WORKSPACE_ID  = os.environ["WORKSPACE_ID"]   # d5309721-c5fc-4d37-924d-0b134d285358
-DATASET_ID    = os.environ["DATASET_ID"]     # 271e0b06-2d81-4060-8776-a2ec3f11578a
-SP_SITE       = os.environ["SHAREPOINT_SITE"]    # https://pgone.sharepoint.com/sites/ITPG
-SP_FOLDER     = os.environ["SHAREPOINT_FOLDER"]  # /Shared Documents/General/Test Automate
-PBI_USERNAME  = os.environ["PBI_USERNAME"]   # duy.le@pg.com
-PBI_PASSWORD  = os.environ["PBI_PASSWORD"]
+REFRESH_TOKEN = os.environ["REFRESH_TOKEN"]
+WORKSPACE_ID  = os.environ["WORKSPACE_ID"]
+DATASET_ID    = os.environ["DATASET_ID"]
+SP_SITE       = os.environ["SHAREPOINT_SITE"]
+SP_FOLDER     = os.environ["SHAREPOINT_FOLDER"]
 
 
-# ── Lấy Access Token (dùng Username/Password) ────────
+# ── Lấy Access Token từ Refresh Token ────────────────
 def get_token():
     url = f"https://login.microsoftonline.com/{TENANT_ID}/oauth2/v2.0/token"
     data = {
-        "grant_type": "password",
+        "grant_type": "refresh_token",
         "client_id": CLIENT_ID,
         "client_secret": CLIENT_SECRET,
-        "username": PBI_USERNAME,
-        "password": PBI_PASSWORD,
-        "scope": "https://analysis.windows.net/powerbi/api/.default"
+        "refresh_token": REFRESH_TOKEN,
+        "scope": "https://analysis.windows.net/powerbi/api/.default offline_access"
     }
     r = requests.post(url, data=data)
     r.raise_for_status()
-    token = r.json().get("access_token")
+    resp = r.json()
+    token = resp.get("access_token")
     if not token:
-        raise Exception(f"Failed to get token: {r.json()}")
+        raise Exception(f"Failed to get token: {resp}")
     print("  Token acquired successfully.")
     return token
 
@@ -93,7 +92,6 @@ def fetch_all_rows(token):
         all_rows.extend(rows)
         print(f"  Fetched {len(all_rows):,} rows so far (page start={start})...")
 
-        # Nếu trả về ít hơn page_size → đã hết data
         if len(rows) < page_size:
             break
 
@@ -104,17 +102,13 @@ def fetch_all_rows(token):
 
 # ── Convert sang CSV ──────────────────────────────────
 def rows_to_csv(rows):
-    # Bỏ dấu [] trong tên cột do Power BI API tự thêm vào
     clean_rows = []
     for row in rows:
         clean_rows.append({k.strip("[]"): v for k, v in row.items()})
 
     df = pd.DataFrame(clean_rows)
-
-    # Lấy ApplyForMonth từ row đầu tiên để đặt tên file
     apply_month = df["ApplyForMonth"].iloc[0] if not df.empty else "unknown"
     filename = f"MD_QDGP_{apply_month}.csv"
-
     df.to_csv(filename, index=False, encoding="utf-8-sig")
     print(f"  Saved {len(df):,} rows to {filename}")
     return filename, apply_month
@@ -125,14 +119,11 @@ def upload_to_sharepoint(filename):
     ctx = ClientContext(SP_SITE).with_credentials(
         ClientCredential(CLIENT_ID, CLIENT_SECRET)
     )
-
-    # Kiểm tra kết nối
     web = ctx.web
     ctx.load(web)
     ctx.execute_query()
     print(f"  Connected to SharePoint: {web.properties['Title']}")
 
-    # Upload file (ghi đè nếu đã tồn tại)
     folder = ctx.web.get_folder_by_server_relative_url(SP_FOLDER)
     with open(filename, "rb") as f:
         file_content = f.read()
