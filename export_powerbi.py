@@ -20,12 +20,18 @@ def get_token():
     url = f"https://login.microsoftonline.com/{TENANT_ID}/oauth2/v2.0/token"
     data = {
         "grant_type": "refresh_token",
-        "client_id": "ea0616ba-638b-4df5-95b9-636659ae5121",  # Power BI official app
+        "client_id": "ea0616ba-638b-4df5-95b9-636659ae5121",
         "refresh_token": REFRESH_TOKEN,
         "scope": "https://analysis.windows.net/powerbi/api/.default offline_access"
     }
     r = requests.post(url, data=data)
-    r.raise_for_status()
+    
+    # In ra lỗi chi tiết thay vì raise ngay
+    if r.status_code != 200:
+        print(f"  Status: {r.status_code}")
+        print(f"  Error: {r.json()}")
+        r.raise_for_status()
+    
     resp = r.json()
     token = resp.get("access_token")
     if not token:
