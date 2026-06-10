@@ -41,6 +41,13 @@ jobs:
           SHAREPOINT_FOLDER: ${{ secrets.SHAREPOINT_FOLDER }}
         run: python export_powerbi.py
 
+      - name: Upload debug screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: debug-screenshots
+          path: "*.png"
+
       - name: Notify on failure
         if: failure()
-        run: echo "Export failed! Check logs above."
+        run: echo "Export failed! Check logs and screenshots in artifacts."
