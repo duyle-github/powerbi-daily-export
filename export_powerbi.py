@@ -35,7 +35,7 @@ DAX_QUERY = """
 """
 
 
-# ── Login Power BI qua PG SSO ─────────────────────────
+# ── Login Power BI qua PG PingFederate SSO ───────────
 async def get_token_via_browser():
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True)
@@ -62,46 +62,62 @@ async def get_token_via_browser():
         await page.goto("https://app.powerbi.com")
         await page.wait_for_load_state("networkidle", timeout=30000)
 
-        # ── Bước 2: Nhập email (id=email) ──
+        # ── Bước 2: Nhập email ──
         await page.wait_for_selector('#email', timeout=10000)
         await page.fill('#email', PBI_USERNAME)
         print("  Email filled, submitting...")
         await page.keyboard.press("Enter")
 
-        # ── Bước 3: Chờ redirect sang PG fedauth ──
+        # ── Bước 3: Chờ sang PG fedauth ──
         await page.wait_for_url("**/fedauth.pg.com/**", timeout=15000)
-        print(f"  PG SSO page: {page.url}")
         await page.wait_for_load_state("networkidle", timeout=15000)
+        print(f"  PG SSO: {page.url}")
 
-        # ── Bước 4: Nhập password trên trang PG ──
-        # Field: name=pf.pass, id=password
+        # ── Bước 4: Nhập password ──
         await page.wait_for_selector('#password', timeout=10000)
         await page.fill('#password', PBI_PASSWORD)
         print("  Password filled, submitting...")
         await page.keyboard.press("Enter")
 
-        # ── Bước 5: Chờ PG SSO xử lý và redirect về Power BI ──
-        print("  Waiting for PG SSO to complete...")
-        try:
-            # Chờ redirect về app.powerbi.com
-            await page.wait_for_url("**/app.powerbi.com/**", timeout=30000)
-            print(f"  Redirected to Power BI: {page.url}")
-        except Exception as e:
-            print(f"  Redirect wait: {e}")
-            print(f"  Current URL: {page.url}")
-            await page.screenshot(path="step_redirect.png")
+        # ── Bước 5: Chờ PingFederate xử lý hết các bước redirect ──
+        # PingFederate có nhiều bước intermediate, chờ tổng tối đa 60s
+        print("  Waiting for SSO chain to complete...")
+        max_wait = 60  # seconds
+        interval = 2
+        elapsed = 0
 
-        # ── Bước 6: Chờ Power BI load hoàn toàn ──
-        print("  Waiting for Power BI to fully load...")
-        try:
-            await page.wait_for_load_state("networkidle", timeout=60000)
-        except:
-            pass
+        while elapsed < max_wait:
+            await page.wait_for_timeout(interval * 1000)
+            elapsed += interval
+            current_url = page.url
+            print(f"  [{elapsed}s] URL: {current_url[:80]}...")
 
-        # Chờ thêm để token được issue
-        await page.wait_for_timeout(10000)
+            # Nếu đã về Power BI → dừng chờ
+            if "app.powerbi.com" in current_url:
+                print("  ✅ Reached Power BI!")
+                break
+
+            # Nếu vẫn đang ở trang intermediate của PingFederate
+            # → thử click submit nếu có form
+            if "fedauth.pg.com" in current_url or "login.microsoftonline.com" in current_url:
+                try:
+                    submit = page.locator('input[type="submit"], button[type="submit"]')
+                    count = await submit.count()
+                    if count > 0:
+                        await submit.first.click()
+                        print(f"  Clicked submit button")
+                except:
+                    pass
+
+            # Nếu có token rồi thì thoát luôn
+            if access_token:
+                break
+
         await page.screenshot(path="step_final.png")
         print(f"  Final URL: {page.url}")
+
+        # Chờ thêm 5s để đảm bảo token được issue
+        await page.wait_for_timeout(5000)
 
         await browser.close()
 
