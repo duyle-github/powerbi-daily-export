@@ -20,8 +20,7 @@ def get_token():
     url = f"https://login.microsoftonline.com/{TENANT_ID}/oauth2/v2.0/token"
     data = {
         "grant_type": "refresh_token",
-        "client_id": CLIENT_ID,
-        "client_secret": CLIENT_SECRET,
+        "client_id": "ea0616ba-638b-4df5-95b9-636659ae5121",  # Power BI official app
         "refresh_token": REFRESH_TOKEN,
         "scope": "https://analysis.windows.net/powerbi/api/.default offline_access"
     }
@@ -33,7 +32,6 @@ def get_token():
         raise Exception(f"Failed to get token: {resp}")
     print("  Token acquired successfully.")
     return token
-
 
 # ── Fetch data với pagination ─────────────────────────
 def fetch_all_rows(token):
