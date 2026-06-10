@@ -35,7 +35,7 @@ DAX_QUERY = """
 """
 
 
-# ── Login Power BI và lấy Access Token ───────────────
+# ── Login Power BI qua PG SSO ─────────────────────────
 async def get_token_via_browser():
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True)
@@ -51,102 +51,62 @@ async def get_token_via_browser():
                     body = await response.json()
                     if "access_token" in body:
                         access_token = body["access_token"]
-                        print("  Token captured!")
+                        print("  ✅ Token captured!")
                 except:
                     pass
 
         page.on("response", handle_response)
 
-        print("  Opening Power BI login...")
+        # ── Bước 1: Mở Power BI ──
+        print("  Opening Power BI...")
         await page.goto("https://app.powerbi.com")
         await page.wait_for_load_state("networkidle", timeout=30000)
-        await page.screenshot(path="step1_initial.png")
-        print(f"  URL: {page.url}")
 
-        # ── Bước 1: Nhập email (id=email, type=text) ──
+        # ── Bước 2: Nhập email (id=email) ──
+        await page.wait_for_selector('#email', timeout=10000)
+        await page.fill('#email', PBI_USERNAME)
+        print("  Email filled, submitting...")
+        await page.keyboard.press("Enter")
+
+        # ── Bước 3: Chờ redirect sang PG fedauth ──
+        await page.wait_for_url("**/fedauth.pg.com/**", timeout=15000)
+        print(f"  PG SSO page: {page.url}")
+        await page.wait_for_load_state("networkidle", timeout=15000)
+
+        # ── Bước 4: Nhập password trên trang PG ──
+        # Field: name=pf.pass, id=password
+        await page.wait_for_selector('#password', timeout=10000)
+        await page.fill('#password', PBI_PASSWORD)
+        print("  Password filled, submitting...")
+        await page.keyboard.press("Enter")
+
+        # ── Bước 5: Chờ PG SSO xử lý và redirect về Power BI ──
+        print("  Waiting for PG SSO to complete...")
         try:
-            await page.wait_for_selector('#email', timeout=10000)
-            await page.fill('#email', PBI_USERNAME)
-            await page.screenshot(path="step2_email_filled.png")
-            print("  Email filled, pressing Enter...")
-            await page.keyboard.press("Enter")
-            await page.wait_for_timeout(3000)
-            await page.screenshot(path="step3_after_email.png")
-            print(f"  After email URL: {page.url}")
+            # Chờ redirect về app.powerbi.com
+            await page.wait_for_url("**/app.powerbi.com/**", timeout=30000)
+            print(f"  Redirected to Power BI: {page.url}")
         except Exception as e:
-            print(f"  Email step error: {e}")
-            await page.screenshot(path="step2_email_error.png")
+            print(f"  Redirect wait: {e}")
+            print(f"  Current URL: {page.url}")
+            await page.screenshot(path="step_redirect.png")
 
-        # ── Bước 2: Có thể có trang chọn account (PG SSO) ──
-        try:
-            # PG có thể redirect sang trang SSO riêng
-            await page.wait_for_load_state("networkidle", timeout=10000)
-            await page.screenshot(path="step3b_sso_page.png")
-            print(f"  SSO URL: {page.url}")
-
-            # In input fields để debug
-            inputs = await page.query_selector_all("input")
-            for i, inp in enumerate(inputs):
-                t = await inp.get_attribute("type")
-                n = await inp.get_attribute("name")
-                id_ = await inp.get_attribute("id")
-                print(f"  Input {i}: type={t}, name={n}, id={id_}")
-        except:
-            pass
-
-        # ── Bước 3: Nhập password ──
-        # Thử nhiều selector khác nhau
-        pwd_selectors = [
-            'input[type="password"]',
-            'input[name="passwd"]',
-            'input[name="password"]',
-            '#passwd',
-            '#password',
-            'input[id*="pass"]',
-        ]
-
-        pwd_filled = False
-        for selector in pwd_selectors:
-            try:
-                pwd = await page.wait_for_selector(selector, timeout=5000)
-                await pwd.fill(PBI_PASSWORD)
-                await page.screenshot(path="step4_password_filled.png")
-                print(f"  Password filled with selector: {selector}")
-                await page.keyboard.press("Enter")
-                await page.wait_for_timeout(3000)
-                await page.screenshot(path="step5_after_password.png")
-                print(f"  After password URL: {page.url}")
-                pwd_filled = True
-                break
-            except:
-                continue
-
-        if not pwd_filled:
-            print("  Could not find password field!")
-            await page.screenshot(path="step4_no_password_found.png")
-
-        # ── Bước 4: Xử lý "Stay signed in?" ──
-        try:
-            submit = await page.wait_for_selector('input[type="submit"]', timeout=5000)
-            await submit.click()
-            await page.wait_for_timeout(2000)
-            print("  Clicked Stay signed in")
-        except:
-            pass
-
-        # ── Chờ Power BI load hoàn toàn ──
+        # ── Bước 6: Chờ Power BI load hoàn toàn ──
+        print("  Waiting for Power BI to fully load...")
         try:
             await page.wait_for_load_state("networkidle", timeout=60000)
         except:
             pass
-        await page.wait_for_timeout(8000)
-        await page.screenshot(path="step6_final.png")
+
+        # Chờ thêm để token được issue
+        await page.wait_for_timeout(10000)
+        await page.screenshot(path="step_final.png")
         print(f"  Final URL: {page.url}")
 
         await browser.close()
 
         if not access_token:
-            raise Exception("Could not capture access token - check screenshots!")
+            raise Exception("Could not capture token - check screenshots!")
 
         return access_token
 
