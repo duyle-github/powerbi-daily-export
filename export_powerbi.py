@@ -1,43 +1,105 @@
-import requests
-import pandas as pd
+import asyncio
 import os
+import pandas as pd
+from playwright.async_api import async_playwright
 from office365.runtime.auth.client_credential import ClientCredential
 from office365.sharepoint.client_context import ClientContext
+import json
+import requests
 
 # ── Config từ GitHub Secrets ──────────────────────────
-TENANT_ID     = os.environ["TENANT_ID"]
-CLIENT_ID     = os.environ["CLIENT_ID"]
-CLIENT_SECRET = os.environ["CLIENT_SECRET"]
-REFRESH_TOKEN = os.environ["REFRESH_TOKEN"]
+PBI_USERNAME  = os.environ["PBI_USERNAME"]
+PBI_PASSWORD  = os.environ["PBI_PASSWORD"]
 WORKSPACE_ID  = os.environ["WORKSPACE_ID"]
 DATASET_ID    = os.environ["DATASET_ID"]
 SP_SITE       = os.environ["SHAREPOINT_SITE"]
 SP_FOLDER     = os.environ["SHAREPOINT_FOLDER"]
+CLIENT_ID     = os.environ["CLIENT_ID"]
+CLIENT_SECRET = os.environ["CLIENT_SECRET"]
+
+DAX_QUERY = """
+    EVALUATE
+    SELECTCOLUMNS(
+        MD_QDGP,
+        "Segment",       MD_QDGP[Segment],
+        "Local_Segment", MD_QDGP[Local_Segment],
+        "SKUCode",       MD_QDGP[SKUCode],
+        "GroupCode",     MD_QDGP[GroupCode],
+        "GroupName",     MD_QDGP[GroupName],
+        "Category",      MD_QDGP[Category],
+        "Region",        MD_QDGP[Region],
+        "MOQ_IT",        MD_QDGP[MOQ (IT)],
+        "ApplyForMonth", MD_QDGP[ApplyForMonth],
+        "ApplyFrom",     MD_QDGP[ApplyFrom],
+        "ApplyTo",       MD_QDGP[ApplyTo]
+    )
+"""
 
 
-# ── Lấy Access Token từ Refresh Token ────────────────
-def get_token():
-    url = f"https://login.microsoftonline.com/{TENANT_ID}/oauth2/v2.0/token"
-    data = {
-        "grant_type": "refresh_token",
-        "client_id": "ea0616ba-638b-4df5-95b9-636659ae5121",
-        "refresh_token": REFRESH_TOKEN,
-        "scope": "https://analysis.windows.net/powerbi/api/.default offline_access"
-    }
-    r = requests.post(url, data=data)
-    
-    # In ra lỗi chi tiết thay vì raise ngay
-    if r.status_code != 200:
-        print(f"  Status: {r.status_code}")
-        print(f"  Error: {r.json()}")
-        r.raise_for_status()
-    
-    resp = r.json()
-    token = resp.get("access_token")
-    if not token:
-        raise Exception(f"Failed to get token: {resp}")
-    print("  Token acquired successfully.")
-    return token
+# ── Login Power BI và lấy Access Token ───────────────
+async def get_token_via_browser():
+    async with async_playwright() as p:
+        browser = await p.chromium.launch(headless=True)
+        context = await browser.new_context()
+        page = await context.new_page()
+
+        access_token = None
+
+        # Intercept token request
+        async def handle_response(response):
+            nonlocal access_token
+            if "oauth2/v2.0/token" in response.url and response.status == 200:
+                try:
+                    body = await response.json()
+                    if "access_token" in body:
+                        access_token = body["access_token"]
+                        print("  Token captured from browser!")
+                except:
+                    pass
+
+        page.on("response", handle_response)
+
+        # Vào Power BI
+        print("  Opening Power BI login...")
+        await page.goto("https://app.powerbi.com")
+        await page.wait_for_load_state("networkidle", timeout=30000)
+
+        # Nhập email
+        try:
+            await page.fill('input[type="email"]', PBI_USERNAME)
+            await page.click('input[type="submit"]')
+            await page.wait_for_timeout(2000)
+        except:
+            print("  Email field not found, trying next...")
+
+        # Nhập password
+        try:
+            await page.wait_for_selector('input[type="password"]', timeout=10000)
+            await page.fill('input[type="password"]', PBI_PASSWORD)
+            await page.click('input[type="submit"]')
+            await page.wait_for_timeout(3000)
+        except Exception as e:
+            print(f"  Password step: {e}")
+
+        # Xử lý "Stay signed in?" prompt
+        try:
+            stay_btn = await page.wait_for_selector('input[type="submit"]', timeout=5000)
+            await stay_btn.click()
+            await page.wait_for_timeout(2000)
+        except:
+            pass
+
+        # Chờ Power BI load xong
+        await page.wait_for_load_state("networkidle", timeout=60000)
+        await page.wait_for_timeout(5000)
+
+        await browser.close()
+
+        if not access_token:
+            raise Exception("Could not capture access token from browser!")
+
+        return access_token
+
 
 # ── Fetch data với pagination ─────────────────────────
 def fetch_all_rows(token):
@@ -47,24 +109,6 @@ def fetch_all_rows(token):
         "Content-Type": "application/json"
     }
 
-    DAX_QUERY = """
-        EVALUATE
-        SELECTCOLUMNS(
-            MD_QDGP,
-            "Segment",       MD_QDGP[Segment],
-            "Local_Segment", MD_QDGP[Local_Segment],
-            "SKUCode",       MD_QDGP[SKUCode],
-            "GroupCode",     MD_QDGP[GroupCode],
-            "GroupName",     MD_QDGP[GroupName],
-            "Category",      MD_QDGP[Category],
-            "Region",        MD_QDGP[Region],
-            "MOQ_IT",        MD_QDGP[MOQ (IT)],
-            "ApplyForMonth", MD_QDGP[ApplyForMonth],
-            "ApplyFrom",     MD_QDGP[ApplyFrom],
-            "ApplyTo",       MD_QDGP[ApplyTo]
-        )
-    """
-
     all_rows = []
     page_size = 100000
     start = 0
@@ -73,28 +117,22 @@ def fetch_all_rows(token):
         body = {
             "queries": [{
                 "query": DAX_QUERY,
-                "pagingInfo": {
-                    "start": start,
-                    "pageSize": page_size
-                }
+                "pagingInfo": {"start": start, "pageSize": page_size}
             }],
-            "serializerSettings": {
-                "includeNulls": True
-            }
+            "serializerSettings": {"includeNulls": True}
         }
 
         r = requests.post(url, headers=headers, json=body)
         r.raise_for_status()
 
-        result = r.json()
-        rows = result["results"][0]["tables"][0].get("rows", [])
+        rows = r.json()["results"][0]["tables"][0].get("rows", [])
 
         if not rows:
-            print(f"  No more rows at start={start}. Done.")
+            print(f"  No more rows at start={start}.")
             break
 
         all_rows.extend(rows)
-        print(f"  Fetched {len(all_rows):,} rows so far (page start={start})...")
+        print(f"  Fetched {len(all_rows):,} rows (page start={start})...")
 
         if len(rows) < page_size:
             break
@@ -106,10 +144,7 @@ def fetch_all_rows(token):
 
 # ── Convert sang CSV ──────────────────────────────────
 def rows_to_csv(rows):
-    clean_rows = []
-    for row in rows:
-        clean_rows.append({k.strip("[]"): v for k, v in row.items()})
-
+    clean_rows = [{k.strip("[]"): v for k, v in row.items()} for row in rows]
     df = pd.DataFrame(clean_rows)
     apply_month = df["ApplyForMonth"].iloc[0] if not df.empty else "unknown"
     filename = f"MD_QDGP_{apply_month}.csv"
@@ -130,36 +165,37 @@ def upload_to_sharepoint(filename):
 
     folder = ctx.web.get_folder_by_server_relative_url(SP_FOLDER)
     with open(filename, "rb") as f:
-        file_content = f.read()
-
-    folder.upload_file(filename, file_content).execute_query()
+        folder.upload_file(filename, f.read()).execute_query()
     print(f"  Uploaded '{filename}' to {SP_FOLDER}")
 
 
 # ── Main ──────────────────────────────────────────────
-if __name__ == "__main__":
+async def main():
     print("=" * 50)
     print("Power BI Daily Export - MD_QDGP")
     print("=" * 50)
 
-    print("\n[1/4] Getting access token...")
-    token = get_token()
+    print("\n[1/4] Logging in via browser...")
+    token = await get_token_via_browser()
 
     print("\n[2/4] Fetching data from Power BI...")
     rows = fetch_all_rows(token)
-    print(f"  Total rows fetched: {len(rows):,}")
+    print(f"  Total rows: {len(rows):,}")
 
     if not rows:
-        print("  No data returned. Exiting.")
+        print("  No data. Exiting.")
         exit(1)
 
     print("\n[3/4] Converting to CSV...")
     filename, month = rows_to_csv(rows)
-    print(f"  File: {filename}")
 
     print("\n[4/4] Uploading to SharePoint...")
     upload_to_sharepoint(filename)
 
     print("\n" + "=" * 50)
-    print(f"Done! File MD_QDGP_{month}.csv uploaded successfully.")
+    print(f"Done! MD_QDGP_{month}.csv uploaded successfully.")
     print("=" * 50)
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
