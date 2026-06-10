@@ -42,15 +42,14 @@ jobs:
       # 5. Chạy script export
       - name: Run Power BI Export
         env:
-          TENANT_ID:        ${{ secrets.TENANT_ID }}
-          CLIENT_ID:        ${{ secrets.CLIENT_ID }}
-          CLIENT_SECRET:    ${{ secrets.CLIENT_SECRET }}
-          WORKSPACE_ID:     ${{ secrets.WORKSPACE_ID }}
-          DATASET_ID:       ${{ secrets.DATASET_ID }}
-          SHAREPOINT_SITE:  ${{ secrets.SHAREPOINT_SITE }}
+          TENANT_ID:         ${{ secrets.TENANT_ID }}
+          CLIENT_ID:         ${{ secrets.CLIENT_ID }}
+          CLIENT_SECRET:     ${{ secrets.CLIENT_SECRET }}
+          REFRESH_TOKEN:     ${{ secrets.REFRESH_TOKEN }}
+          WORKSPACE_ID:      ${{ secrets.WORKSPACE_ID }}
+          DATASET_ID:        ${{ secrets.DATASET_ID }}
+          SHAREPOINT_SITE:   ${{ secrets.SHAREPOINT_SITE }}
           SHAREPOINT_FOLDER: ${{ secrets.SHAREPOINT_FOLDER }}
-          PBI_USERNAME:     ${{ secrets.PBI_USERNAME }}
-          PBI_PASSWORD:     ${{ secrets.PBI_PASSWORD }}
         run: python export_powerbi.py
 
       # 6. Thông báo nếu thất bại
