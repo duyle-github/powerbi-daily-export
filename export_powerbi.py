@@ -4,7 +4,6 @@ import pandas as pd
 from playwright.async_api import async_playwright
 from office365.runtime.auth.client_credential import ClientCredential
 from office365.sharepoint.client_context import ClientContext
-import json
 import requests
 
 # ── Config từ GitHub Secrets ──────────────────────────
@@ -45,7 +44,6 @@ async def get_token_via_browser():
 
         access_token = None
 
-        # Intercept token request
         async def handle_response(response):
             nonlocal access_token
             if "oauth2/v2.0/token" in response.url and response.status == 200:
@@ -53,7 +51,7 @@ async def get_token_via_browser():
                     body = await response.json()
                     if "access_token" in body:
                         access_token = body["access_token"]
-                        print("  Token captured from browser!")
+                        print("  Token captured!")
                 except:
                     pass
 
@@ -63,40 +61,61 @@ async def get_token_via_browser():
         print("  Opening Power BI login...")
         await page.goto("https://app.powerbi.com")
         await page.wait_for_load_state("networkidle", timeout=30000)
+        await page.screenshot(path="step1_initial.png")
+        print(f"  Page title: {await page.title()}")
+        print(f"  Page URL: {page.url}")
 
-        # Nhập email
-        try:
-            await page.fill('input[type="email"]', PBI_USERNAME)
-            await page.click('input[type="submit"]')
-            await page.wait_for_timeout(2000)
-        except:
-            print("  Email field not found, trying next...")
+        # In ra tất cả input fields trên trang
+        inputs = await page.query_selector_all("input")
+        for i, inp in enumerate(inputs):
+            inp_type = await inp.get_attribute("type")
+            inp_name = await inp.get_attribute("name")
+            inp_id = await inp.get_attribute("id")
+            print(f"  Input {i}: type={inp_type}, name={inp_name}, id={inp_id}")
 
-        # Nhập password
+        # Thử nhập email
         try:
-            await page.wait_for_selector('input[type="password"]', timeout=10000)
-            await page.fill('input[type="password"]', PBI_PASSWORD)
-            await page.click('input[type="submit"]')
+            email_input = await page.wait_for_selector('input[type="email"]', timeout=5000)
+            await email_input.fill(PBI_USERNAME)
+            await page.screenshot(path="step2_email.png")
+            await page.keyboard.press("Enter")
             await page.wait_for_timeout(3000)
+            await page.screenshot(path="step3_after_email.png")
+            print(f"  After email URL: {page.url}")
         except Exception as e:
-            print(f"  Password step: {e}")
+            print(f"  Email input not found: {e}")
 
-        # Xử lý "Stay signed in?" prompt
+        # Thử nhập password
         try:
-            stay_btn = await page.wait_for_selector('input[type="submit"]', timeout=5000)
-            await stay_btn.click()
+            pwd_input = await page.wait_for_selector('input[type="password"]', timeout=10000)
+            await pwd_input.fill(PBI_PASSWORD)
+            await page.screenshot(path="step4_password.png")
+            await page.keyboard.press("Enter")
+            await page.wait_for_timeout(3000)
+            await page.screenshot(path="step5_after_password.png")
+            print(f"  After password URL: {page.url}")
+        except Exception as e:
+            print(f"  Password input not found: {e}")
+            await page.screenshot(path="step4_no_password.png")
+
+        # Xử lý "Stay signed in?"
+        try:
+            await page.wait_for_selector('input[type="submit"]', timeout=5000)
+            await page.click('input[type="submit"]')
             await page.wait_for_timeout(2000)
         except:
             pass
 
-        # Chờ Power BI load xong
+        # Chờ load xong
         await page.wait_for_load_state("networkidle", timeout=60000)
         await page.wait_for_timeout(5000)
+        await page.screenshot(path="step6_final.png")
+        print(f"  Final URL: {page.url}")
 
         await browser.close()
 
         if not access_token:
-            raise Exception("Could not capture access token from browser!")
+            raise Exception("Could not capture access token - check screenshots in artifacts!")
 
         return access_token
 
